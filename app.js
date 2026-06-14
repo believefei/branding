@@ -29,28 +29,33 @@ const rawCsv = `hour,T,H,P,W,M
 
 const rows = parseCsv(rawCsv);
 const stats = summarize(rows);
-const groups = chunkRows(rows, 4);
+const groups = chunkRows(rows, 6);
 
 const palette = buildPalette(stats);
 
 const poster = {
   size: 720,
   body: {
-    x: 360,
-    y: 120,
-    radius: 78,
+    x: 308,
+    y: 86,
+    radius: 118,
   },
   motion: {
     speed: 0.85 + normalizeValue(stats.avgW, stats.minW, stats.maxW) * 0.45,
     pulse: 0.04,
   },
+  timeline: {
+    secondsPerDay: 18,
+  },
 };
 
 const limbAnchors = [
-  { x: 300, y: 192, side: -0.9 },
-  { x: 342, y: 195, side: -0.28 },
-  { x: 378, y: 195, side: 0.28 },
-  { x: 420, y: 192, side: 0.9 },
+  { x: 214, y: 166, side: -1.56, bias: -0.46, depth: 0.22, scale: 0.84 },
+  { x: 252, y: 182, side: -1.08, bias: -0.26, depth: 0.4, scale: 0.94 },
+  { x: 292, y: 194, side: -0.52, bias: -0.08, depth: 0.66, scale: 1.04 },
+  { x: 334, y: 198, side: 0.02, bias: 0.04, depth: 0.9, scale: 1.12 },
+  { x: 380, y: 194, side: 0.62, bias: 0.18, depth: 0.72, scale: 1.08 },
+  { x: 430, y: 176, side: 1.42, bias: 0.4, depth: 0.36, scale: 0.92 },
 ];
 
 const limbData = groups.map((group, index) => deriveLimb(group, index));
@@ -58,14 +63,15 @@ const staticPaper = buildPaperTexture();
 
 function animate(now) {
   const time = now * 0.001;
-  const model = buildModel(time);
-  drawScene(model, time);
+  const dataState = getDataState(time);
+  const model = buildModel(time, dataState);
+  drawScene(model, time, dataState);
   requestAnimationFrame(animate);
 }
 
-function buildModel(time) {
+function buildModel(time, dataState) {
   return {
-    limbs: limbData.map((limb, index) => buildLimbModel(limb, time, index)),
+    limbs: limbData.map((limb, index) => buildLimbModel(limb, time, index, dataState)),
   };
 }
 
@@ -84,67 +90,122 @@ function deriveLimb(group, index) {
   const anchor = limbAnchors[index];
 
   const direction = anchor.side;
-  const length = lerp(320, 500, mNorm);
-  const spread = lerp(18, 70, pNorm);
+  const length = lerp(340, 560, mNorm) * anchor.scale;
+  const spread = lerp(34, 132, pNorm) * anchor.scale;
 
   return {
     group,
     anchor,
     phase: index * 0.8,
-    sway: lerp(0.08, 0.24, wNorm),
-    maxRadius: lerp(24, 34, tNorm),
-    minRadius: lerp(6, 11, hNorm),
-    lineCount: group.length + 5,
-    hook: lerp(14, 32, mNorm),
+    sway: lerp(0.12, 0.34, wNorm) * lerp(0.9, 1.14, anchor.scale),
+    maxRadius: lerp(22, 36, tNorm) * lerp(0.88, 1.12, anchor.depth),
+    minRadius: lerp(6, 11, hNorm) * lerp(0.9, 1.05, anchor.scale),
+    lineCount: group.length + 6,
+    hook: lerp(24, 58, mNorm) * anchor.scale,
     direction,
     c1: {
-      x: anchor.x + direction * lerp(8, 18, wNorm),
-      y: anchor.y + lerp(80, 120, tNorm),
+      x: anchor.x + direction * lerp(16, 38, wNorm) + anchor.bias * 42,
+      y: anchor.y + lerp(86, 138, tNorm),
     },
     c2: {
-      x: anchor.x + direction * spread,
-      y: anchor.y + length * 0.62,
+      x: anchor.x + direction * spread + anchor.bias * 92,
+      y: anchor.y + length * lerp(0.42, 0.7, anchor.depth),
     },
     end: {
-      x: anchor.x + direction * (spread + lerp(8, 24, pNorm)),
-      y: anchor.y + length,
+      x: anchor.x + direction * (spread + lerp(22, 78, pNorm)) + anchor.bias * 128,
+      y: anchor.y + length * lerp(0.94, 1.14, anchor.depth),
     },
-    toneShift: (index - 1.5) * 0.06,
-    suckerSide: direction < 0 ? 1 : -1,
+    toneShift: (index - 2.5) * 0.045,
+    depth: anchor.depth,
   };
 }
 
-function buildLimbModel(limb, time, index) {
-  const spine = sampleLimbSpine(limb, time, index);
+function buildLimbModel(limb, time, index, dataState) {
+  const spine = sampleLimbSpine(limb, time, index, dataState);
   return {
+    depth: limb.depth,
     spine,
-    bodyCircles: buildBodyCircles(limb, spine, time),
+    bodyCircles: buildBodyCircles(limb, spine, time, dataState),
   };
 }
 
-function sampleLimbSpine(limb, time, index) {
+function sampleLimbSpine(limb, time, index, dataState) {
   const points = [];
+  const windNorm = normalizeValue(dataState.W, stats.minW, stats.maxW);
+  const pressureNorm = normalizeValue(dataState.P, stats.minP, stats.maxP);
+  const moistureNorm = normalizeValue(dataState.M, stats.minM, stats.maxM);
+  const tempNorm = normalizeValue(dataState.T, stats.minT, stats.maxT);
+  const growSide = limb.direction * lerp(22, 92, pressureNorm) * lerp(0.82, 1.18, limb.depth);
+  const crownLift = lerp(10, 34, moistureNorm);
+  const curlStrength = lerp(26, 84, moistureNorm * 0.6 + windNorm * 0.4);
+  const curlPhase = limb.phase + index * 0.45;
 
   for (let i = 0; i < limb.lineCount; i += 1) {
     const t = i / (limb.lineCount - 1);
     const sway =
-      Math.sin(time * poster.motion.speed + limb.phase + t * 4 + index * 0.25) *
-      limb.sway *
-      easeInOut(Math.max(0, (t - 0.15) / 0.85));
+      Math.sin(time * poster.motion.speed + limb.phase + t * 4.8 + index * 0.25) *
+      (limb.sway + windNorm * 0.08) *
+      easeInOut(Math.max(0, (t - 0.08) / 0.92));
+    const reach = easeInOut(t);
+    const organicBend =
+      Math.sin(t * Math.PI * (1.2 + pressureNorm * 0.8) + limb.phase) *
+      growSide *
+      reach;
+    const livingDrift =
+      Math.sin(time * 0.55 + index * 0.9 + t * 5.2) *
+      lerp(4, 18, tempNorm) *
+      reach;
+    const curlStart = clamp((t - 0.46) / 0.54, 0, 1);
+    const curlReach = easeInOut(curlStart);
+    const spiralX =
+      Math.sin(curlPhase + t * Math.PI * (1.4 + pressureNorm) + time * 0.42) *
+      curlStrength *
+      curlReach;
+    const spiralY =
+      Math.cos(curlPhase * 0.8 + t * Math.PI * (1.2 + moistureNorm * 0.7)) *
+      curlStrength *
+      0.22 *
+      curlReach;
 
     let p = cubicPoint(
       limb.anchor,
-      { x: limb.c1.x + sway * 20, y: limb.c1.y },
-      { x: limb.c2.x + sway * 28, y: limb.c2.y + sway * 8 },
-      { x: limb.end.x + sway * 12, y: limb.end.y },
+      { x: limb.c1.x + sway * 20 + organicBend * 0.18, y: limb.c1.y - crownLift },
+      {
+        x: limb.c2.x + sway * 28 + organicBend * 0.72 + spiralX * 0.22,
+        y: limb.c2.y + sway * 8 - spiralY * 0.4,
+      },
+      {
+        x:
+          limb.end.x +
+          sway * 12 +
+          organicBend +
+          livingDrift +
+          spiralX * 0.5 +
+          limb.anchor.bias * 32,
+        y: limb.end.y - spiralY * 0.55,
+      },
       t
     );
 
-    if (t > 0.76) {
-      const hookT = (t - 0.76) / 0.24;
+    p = {
+      x: p.x + spiralX * 0.38,
+      y: p.y - spiralY * 0.3,
+    };
+
+    if (t > 0.62) {
+      const hookT = (t - 0.62) / 0.38;
+      const loop = Math.sin(hookT * Math.PI * (1.2 + moistureNorm * 0.4));
       p = {
-        x: p.x + limb.direction * Math.sin(hookT * Math.PI) * limb.hook * 0.22,
-        y: p.y + Math.sin(hookT * Math.PI) * limb.hook * 0.08 - hookT * 8,
+        x:
+          p.x +
+          limb.direction *
+            (loop * limb.hook * lerp(0.28, 0.54, windNorm) +
+              Math.sin(hookT * Math.PI * 2.15 + curlPhase) * curlStrength * 0.18),
+        y:
+          p.y +
+          Math.sin(hookT * Math.PI * 1.1) * limb.hook * lerp(0.12, 0.24, moistureNorm) -
+          hookT * lerp(4, 14, windNorm) +
+          Math.cos(hookT * Math.PI * 1.8 + curlPhase) * curlStrength * 0.08,
       };
     }
 
@@ -154,7 +215,9 @@ function sampleLimbSpine(limb, time, index) {
   return points;
 }
 
-function buildBodyCircles(limb, spine, time) {
+function buildBodyCircles(limb, spine, time, dataState) {
+  const humidNorm = normalizeValue(dataState.H, stats.minH, stats.maxH);
+  const tempNorm = normalizeValue(dataState.T, stats.minT, stats.maxT);
   return spine.map((point, index) => {
     const t = index / (spine.length - 1);
     const baseRadius = lerp(limb.maxRadius, limb.minRadius, t);
@@ -166,42 +229,90 @@ function buildBodyCircles(limb, spine, time) {
     return {
       x: point.x,
       y: point.y,
-      r: baseRadius * pulse,
-      fill: shiftColor(index % 3 === 0 ? palette.bodyDeep : palette.body, limb.toneShift),
+      r: baseRadius * pulse * lerp(0.96, 1.08, tempNorm),
+      fill: shiftColor(
+        index % 3 === 0 ? palette.bodyDeep : palette.body,
+        limb.toneShift + lerp(-0.02, 0.05, limb.depth)
+      ),
+      alpha: lerp(0.9, 1, limb.depth),
     };
   });
 }
 
-function drawScene(model, time) {
+function drawScene(model, time, dataState) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.fillStyle = palette.paper;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(staticPaper, 0, 0);
 
+  drawBackdropShapes(dataState);
   drawPosterGlow();
+  drawBodyShadow();
 
-  for (const limb of model.limbs) {
+  const orderedLimbs = [...model.limbs].sort((a, b) => a.depth - b.depth);
+
+  for (const limb of orderedLimbs) {
     drawBodyCircles(limb.bodyCircles);
   }
 
-  drawBody();
+  drawBody(dataState);
 
   drawDust();
 }
 
+function drawBackdropShapes(dataState) {
+  const pressureNorm = normalizeValue(dataState.P, stats.minP, stats.maxP);
+  const humidNorm = normalizeValue(dataState.H, stats.minH, stats.maxH);
+
+  ctx.save();
+
+  const wash = ctx.createRadialGradient(126, 126, 24, 126, 126, 260);
+  wash.addColorStop(0, "rgba(255,255,255,0.24)");
+  wash.addColorStop(0.5, "rgba(243,139,196,0.1)");
+  wash.addColorStop(1, "rgba(243,139,196,0)");
+  ctx.fillStyle = wash;
+  ctx.beginPath();
+  ctx.arc(126, 126, 258, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = `rgba(152, 0, 95, ${lerp(0.05, 0.11, humidNorm).toFixed(3)})`;
+  ctx.beginPath();
+  ctx.ellipse(612, 610, 180 + pressureNorm * 70, 122, -0.42, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = `rgba(112, 0, 70, ${lerp(0.08, 0.16, pressureNorm).toFixed(3)})`;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(104, 544, 244, -0.3, 0.78);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
 function drawPosterGlow() {
-  const gradient = ctx.createRadialGradient(360, 180, 30, 360, 180, 420);
-  gradient.addColorStop(0, "rgba(255,255,255,0.32)");
-  gradient.addColorStop(0.45, "rgba(247,236,227,0.14)");
+  const gradient = ctx.createRadialGradient(254, 118, 18, 330, 198, 520);
+  gradient.addColorStop(0, "rgba(255,255,255,0.4)");
+  gradient.addColorStop(0.3, "rgba(250,232,244,0.12)");
+  gradient.addColorStop(0.55, "rgba(247,236,227,0.12)");
   gradient.addColorStop(1, "rgba(247,236,227,0)");
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 }
 
-function drawBody() {
-  const split = lerp(0.28, 0.72, normalizeValue(stats.avgP, stats.minP, stats.maxP));
-  const topColor = palette.bodyDeep;
-  const bottomColor = palette.rim;
+function drawBodyShadow() {
+  const gradient = ctx.createRadialGradient(306, 196, 16, 318, 248, 164);
+  gradient.addColorStop(0, "rgba(98, 0, 61, 0.22)");
+  gradient.addColorStop(1, "rgba(98, 0, 61, 0)");
+  ctx.fillStyle = gradient;
+  ctx.beginPath();
+  ctx.ellipse(314, 222, 158, 52, -0.12, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawBody(dataState) {
+  const split = lerp(0.18, 0.74, normalizeValue(dataState.P, stats.minP, stats.maxP));
+  const topColor = shiftColor(palette.bodyDeep, normalizeValue(dataState.W, stats.minW, stats.maxW) * -0.08);
+  const bottomColor = shiftColor(palette.rim, normalizeValue(dataState.H, stats.minH, stats.maxH) * 0.06);
   const gradient = ctx.createLinearGradient(
     poster.body.x,
     poster.body.y - poster.body.radius,
@@ -213,9 +324,20 @@ function drawBody() {
   gradient.addColorStop(1, bottomColor);
 
   ctx.save();
+  ctx.shadowColor = "rgba(102, 16, 74, 0.18)";
+  ctx.shadowBlur = 34;
+  ctx.shadowOffsetY = 16;
   ctx.fillStyle = gradient;
   ctx.beginPath();
   ctx.arc(poster.body.x, poster.body.y, poster.body.radius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowColor = "transparent";
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = "rgba(255,255,255,0.2)";
+  ctx.stroke();
+  ctx.fillStyle = "rgba(255,255,255,0.1)";
+  ctx.beginPath();
+  ctx.arc(poster.body.x - 24, poster.body.y - 28, poster.body.radius * 0.4, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 }
@@ -231,6 +353,7 @@ function drawBodyCircles(circles) {
     ctx.arc(c.x + 1.2, c.y + 3, c.r * 1.02, 0, Math.PI * 2);
     ctx.fill();
 
+    ctx.globalAlpha = c.alpha;
     ctx.fillStyle = c.fill;
     ctx.beginPath();
     ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
@@ -242,6 +365,7 @@ function drawBodyCircles(circles) {
     ctx.fill();
   }
 
+  ctx.globalAlpha = 1;
   ctx.restore();
 }
 
@@ -311,6 +435,26 @@ function parseCsv(text) {
     });
     return row;
   });
+}
+
+function getDataState(time) {
+  const cycle = poster.timeline.secondsPerDay;
+  const normalized = ((time % cycle) + cycle) % cycle / cycle;
+  const exactIndex = normalized * rows.length;
+  const i0 = Math.floor(exactIndex) % rows.length;
+  const i1 = (i0 + 1) % rows.length;
+  const t = exactIndex - Math.floor(exactIndex);
+  const a = rows[i0];
+  const b = rows[i1];
+
+  return {
+    hour: lerp(a.hour, b.hour, t),
+    T: lerp(a.T, b.T, t),
+    H: lerp(a.H, b.H, t),
+    P: lerp(a.P, b.P, t),
+    W: lerp(a.W, b.W, t),
+    M: lerp(a.M, b.M, t),
+  };
 }
 
 function summarize(data) {
